@@ -1,0 +1,101 @@
+# .github/workflows/destroy-iq.yml
+#
+# iQ VPC stack destruction — manual trigger only, double-guarded:
+#   1. Must be run via workflow_dispatch (never fires on push/PR)
+#   2. Requires typing the exact stack name as confirmation
+#   3. Runs in the 'infrastructure' environment, so any approval
+#      rules configured there apply to destruction too.
+#
+# Auth: same OIDC role as deployment (github-actions-iq-deploy).
+
+name: Destroy iQ VPC
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_stack_name:
+        description: 'Type the stack name (iq) to confirm destruction'
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  STACK_NAME: iq
+  DEPLOY_ROLE_ARN: arn:aws:iam::715841359129:role/github-actions-iq-deploy
+
+jobs:
+  destroy:
+    name: Destroy stack
+    runs-on: ubuntu-latest
+    environment: infrastructure
+    steps:
+      - name: Validate confirmation input
+        run: |
+          if [ "${{ github.event.inputs.confirm_stack_name }}" != "${{ env.STACK_NAME }}" ]; then
+            echo "::error::Confirmation failed. You typed '${{ github.event.inputs.confirm_stack_name }}' but the stack name is '${{ env.STACK_NAME }}'. Aborting."
+            exit 1
+          fi
+          echo "Confirmation accepted. Proceeding with destruction of stack '${{ env.STACK_NAME }}'."
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
+          role-session-name: gha-iq-destroy-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Check for blocking exports
+        run: |
+          # Abort if any of this stack's exports are imported by other stacks.
+          # Deleting would fail mid-way and strand the stack in DELETE_FAILED.
+          IMPORTS_FOUND=0
+          EXPORTS=$(aws cloudformation list-exports \
+            --query "Exports[?ExportingStackId!=null] | [?starts_with(Name, 'iq-')].Name" \
+            --output text)
+          for EXPORT in $EXPORTS; do
+            IMPORTERS=$(aws cloudformation list-imports --export-name "$EXPORT" \
+              --query 'Imports' --output text 2>/dev/null || true)
+            if [ -n "$IMPORTERS" ]; then
+              echo "::error::Export '$EXPORT' is imported by: $IMPORTERS"
+              IMPORTS_FOUND=1
+            fi
+          done
+          if [ "$IMPORTS_FOUND" -eq 1 ]; then
+            echo "::error::Cannot destroy: other stacks depend on this stack's exports. Delete the dependent stacks first."
+            exit 1
+          fi
+          echo "No dependent stacks found. Safe to proceed."
+
+      - name: Show what will be destroyed
+        run: |
+          echo "Current stack status:"
+          aws cloudformation describe-stacks --stack-name ${{ env.STACK_NAME }} \
+            --query 'Stacks[0].{Status:StackStatus,Created:CreationTime,Resources:Tags}' \
+            --output table
+          echo "Resource inventory (this will all be deleted):"
+          aws cloudformation describe-stack-resources --stack-name ${{ env.STACK_NAME }} \
+            --query 'StackResources[].{Type:ResourceType,LogicalId:LogicalResourceId,Status:ResourceStatus}' \
+            --output table
+
+      - name: Delete stack
+        run: |
+          aws cloudformation delete-stack --stack-name ${{ env.STACK_NAME }}
+          echo "Delete initiated. Waiting for completion (this may take several minutes)..."
+          aws cloudformation wait stack-delete-complete --stack-name ${{ env.STACK_NAME }}
+          echo "Stack '${{ env.STACK_NAME }}' deleted successfully."
+
+      - name: Verify destruction
+        run: |
+          if aws cloudformation describe-stacks --stack-name ${{ env.STACK_NAME }} 2>/dev/null; then
+            echo "::error::Stack still exists after deletion attempt. Check DELETE_FAILED events:"
+            aws cloudformation describe-stack-events --stack-name ${{ env.STACK_NAME }} \
+              --query "StackEvents[?ResourceStatus=='DELETE_FAILED'].{Resource:LogicalResourceId,Reason:ResourceStatusReason}" \
+              --output table
+            exit 1
+          else
+            echo "Verified: stack no longer exists. No further charges from these resources."
+          fi
