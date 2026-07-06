@@ -88,13 +88,20 @@ jobs:
           aws cloudformation wait stack-delete-complete --stack-name ${{ env.STACK_NAME }}
           echo "Stack '${{ env.STACK_NAME }}' deleted successfully."
 
+      - name: Diagnose failed deletion
+        if: failure()
+        run: |
+          echo "::error::Stack deletion failed. DELETE_FAILED resources and reasons:"
+          aws cloudformation describe-stack-events --stack-name ${{ env.STACK_NAME }} \
+            --query "StackEvents[?ResourceStatus=='DELETE_FAILED'].{Resource:LogicalResourceId,Type:ResourceType,Reason:ResourceStatusReason}" \
+            --output table
+          echo "Note: DELETE_FAILED is retryable. Re-run this workflow to resume deletion."
+
       - name: Verify destruction
+        if: success()
         run: |
           if aws cloudformation describe-stacks --stack-name ${{ env.STACK_NAME }} 2>/dev/null; then
-            echo "::error::Stack still exists after deletion attempt. Check DELETE_FAILED events:"
-            aws cloudformation describe-stack-events --stack-name ${{ env.STACK_NAME }} \
-              --query "StackEvents[?ResourceStatus=='DELETE_FAILED'].{Resource:LogicalResourceId,Reason:ResourceStatusReason}" \
-              --output table
+            echo "::error::Stack still exists after deletion attempt."
             exit 1
           else
             echo "Verified: stack no longer exists. No further charges from these resources."
