@@ -1,0 +1,962 @@
+Description:  iQ base VPC Template + Public Instance
+Parameters:
+  LatestAmiId:
+    Description: AMI for Bastion Host (default is latest AmaLinux2023)
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64'
+  AllowedSshCidr:
+    Description: Trusted CIDR range for SSH ingress. Replace with an approved corporate or jump-host range.
+    Type: String
+    Default: 203.0.113.0/24
+  EnvironmentName:
+    Description: Environment name used for tagging and naming.
+    Type: String
+    Default: iq
+  CostCenter:
+    Description: Cost center tag for CAF governance.
+    Type: String
+    Default: Platform
+  DataClassification:
+    Description: Data classification tag for CAF governance.
+    Type: String
+    Default: Confidential
+  MonthlyBudgetLimit:
+    Description: Monthly cost threshold for FinOps budget alerts.
+    Type: Number
+    Default: 1000
+  BudgetNotificationEmail:
+    Description: Email address for FinOps budget notifications.
+    Type: String
+    Default: finops@example.com
+  AIWorkloadType:
+    Description: Choose the primary AI/ML workload pattern for subnet design.
+    Type: String
+    Default: GenAI
+    AllowedValues:
+      - GenAI
+      - Training
+      - Inference
+      - Hybrid
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.16.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: iQ
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DataClassification
+          Value: !Ref DataClassification
+  InternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+    Properties:
+      Tags:
+        - Key: Name
+          Value: iQ.iGW
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DataClassification
+          Value: !Ref DataClassification
+  InternetGatewayAttachment:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+  RouteTableWeb: 
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: L3.IIS.route.1a
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DataClassification
+          Value: !Ref DataClassification
+  RouteTableWebDefaultIPv4: 
+    Type: 'AWS::EC2::Route'
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId:
+        Ref: RouteTableWeb
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId:
+        Ref: InternetGateway
+  PrivateRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: L4.private.route.1a
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DataClassification
+          Value: !Ref DataClassification
+  RouteTableAssociationWebA:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref SubnetWEBA
+      RouteTableId:
+        Ref: RouteTableWeb
+  RouteTableAssociationWebB:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref SubnetWEBB
+      RouteTableId:
+        Ref: RouteTableWeb
+  RouteTableAssociationWebC:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref SubnetWEBC
+      RouteTableId:
+        Ref: RouteTableWeb
+  RouteTableAssociationPrivateAPPA:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref SubnetAPPA
+      RouteTableId:
+        Ref: PrivateRouteTable
+  RouteTableAssociationPrivateAPPB:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref SubnetAPPB
+      RouteTableId:
+        Ref: PrivateRouteTable
+  RouteTableAssociationPrivateAPPC:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref SubnetAPPC
+      RouteTableId:
+        Ref: PrivateRouteTable
+  RouteTableAssociationPrivateDBA:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref SubnetDBA
+      RouteTableId:
+        Ref: PrivateRouteTable
+  RouteTableAssociationPrivateDBB:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref SubnetDBB
+      RouteTableId:
+        Ref: PrivateRouteTable
+  RouteTableAssociationPrivateDBC:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref SubnetDBC
+      RouteTableId:
+        Ref: PrivateRouteTable
+  RouteTableAssociationPrivateAITrainingA:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref SubnetAITrainingA
+      RouteTableId:
+        Ref: PrivateRouteTable
+  RouteTableAssociationPrivateAITrainingB:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref SubnetAITrainingB
+      RouteTableId:
+        Ref: PrivateRouteTable
+  RouteTableAssociationPrivateAIInferenceA:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref SubnetAIInferenceA
+      RouteTableId:
+        Ref: PrivateRouteTable
+  RouteTableAssociationPrivateAIInferenceB:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref SubnetAIInferenceB
+      RouteTableId:
+        Ref: PrivateRouteTable
+  SubnetReservedA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: 10.16.0.0/20
+      Tags:
+        - Key: Name
+          Value: L7.reserved.subnet.1a
+  SubnetReservedB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: 10.16.64.0/20
+      Tags:
+        - Key: Name
+          Value: L7.reserved.subnet.1b
+  SubnetReservedC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 2, !GetAZs '' ]
+      CidrBlock: 10.16.128.0/20
+      Tags:
+        - Key: Name
+          Value: L7.reserved.subnet.1c
+  SubnetDBA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: 10.16.16.0/20
+      Tags:
+        - Key: Name
+          Value: L2.SQL.subnet.1a
+  SubnetDBB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: 10.16.80.0/20
+      Tags:
+        - Key: Name
+          Value: L2.SQL.subnet.1b
+  SubnetDBC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 2, !GetAZs '' ]
+      CidrBlock: 10.16.144.0/20
+      Tags:
+        - Key: Name
+          Value: L2.SQL.subnet.1c
+  SubnetAPPA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: 10.16.32.0/20
+      Tags:
+        - Key: Name
+          Value: iQ.subnet.1a
+  SubnetAPPB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: 10.16.96.0/20
+      Tags:
+        - Key: Name
+          Value: iQ.subnet.1b
+  SubnetAPPC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 2, !GetAZs '' ]
+      CidrBlock: 10.16.160.0/20
+      Tags:
+        - Key: Name
+          Value: iQ.subnet.1c
+  SubnetWEBA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: 10.16.48.0/20
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: sn-web-A
+  SubnetWEBB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: 10.16.112.0/20
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: sn-web-B
+  SubnetWEBC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 2, !GetAZs '' ]
+      CidrBlock: 10.16.176.0/20
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: sn-web-C
+  SubnetAITrainingA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: 10.16.192.0/20
+      Tags:
+        - Key: Name
+          Value: L1.AI.training.subnet.1a
+        - Key: WorkloadType
+          Value: AI-Training
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DataClassification
+          Value: !Ref DataClassification
+  SubnetAITrainingB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: 10.16.208.0/20
+      Tags:
+        - Key: Name
+          Value: L1.AI.training.subnet.1b
+        - Key: WorkloadType
+          Value: AI-Training
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DataClassification
+          Value: !Ref DataClassification
+  SubnetAIInferenceA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: 10.16.224.0/20
+      Tags:
+        - Key: Name
+          Value: L1.AI.inference.subnet.1a
+        - Key: WorkloadType
+          Value: AI-Inference
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DataClassification
+          Value: !Ref DataClassification
+  SubnetAIInferenceB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: 10.16.240.0/20
+      Tags:
+        - Key: Name
+          Value: L1.AI.inference.subnet.1b
+        - Key: WorkloadType
+          Value: AI-Inference
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DataClassification
+          Value: !Ref DataClassification
+  PublicSubnetNACL:
+    Type: AWS::EC2::NetworkAcl
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: iQ-public-nacl
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DataClassification
+          Value: !Ref DataClassification
+  PrivateSubnetNACL:
+    Type: AWS::EC2::NetworkAcl
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: iQ-private-nacl
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DataClassification
+          Value: !Ref DataClassification
+  PublicSubnetNACLIngressHTTP:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PublicSubnetNACL
+      RuleNumber: 100
+      Protocol: 6
+      RuleAction: allow
+      Egress: false
+      CidrBlock: 0.0.0.0/0
+      PortRange:
+        From: 80
+        To: 80
+  PublicSubnetNACLIngressHTTPS:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PublicSubnetNACL
+      RuleNumber: 110
+      Protocol: 6
+      RuleAction: allow
+      Egress: false
+      CidrBlock: 0.0.0.0/0
+      PortRange:
+        From: 443
+        To: 443
+  PublicSubnetNACLIngressSSH:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PublicSubnetNACL
+      RuleNumber: 120
+      Protocol: 6
+      RuleAction: allow
+      Egress: false
+      CidrBlock: !Ref AllowedSshCidr
+      PortRange:
+        From: 22
+        To: 22
+  PublicSubnetNACLIngressEphemeral:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PublicSubnetNACL
+      RuleNumber: 130
+      Protocol: 6
+      RuleAction: allow
+      Egress: false
+      CidrBlock: 0.0.0.0/0
+      PortRange:
+        From: 1024
+        To: 65535
+  PublicSubnetNACLEgress:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PublicSubnetNACL
+      RuleNumber: 100
+      Protocol: 6
+      RuleAction: allow
+      Egress: true
+      CidrBlock: 0.0.0.0/0
+      PortRange:
+        From: 80
+        To: 443
+  PrivateSubnetNACLIngress:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PrivateSubnetNACL
+      RuleNumber: 100
+      Protocol: -1
+      RuleAction: allow
+      Egress: false
+      CidrBlock: !GetAtt VPC.CidrBlock
+      PortRange:
+        From: 0
+        To: 65535
+  PrivateSubnetNACLIngressEphemeral:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PrivateSubnetNACL
+      RuleNumber: 110
+      Protocol: 6
+      RuleAction: allow
+      Egress: false
+      CidrBlock: !GetAtt VPC.CidrBlock
+      PortRange:
+        From: 1024
+        To: 65535
+  PrivateSubnetNACLEgress:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PrivateSubnetNACL
+      RuleNumber: 100
+      Protocol: -1
+      RuleAction: allow
+      Egress: true
+      CidrBlock: 0.0.0.0/0
+      PortRange:
+        From: 0
+        To: 65535
+  PublicSubnetNACLAssociationWEBA:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref SubnetWEBA
+      NetworkAclId: !Ref PublicSubnetNACL
+  PublicSubnetNACLAssociationWEBB:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref SubnetWEBB
+      NetworkAclId: !Ref PublicSubnetNACL
+  PublicSubnetNACLAssociationWEBC:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref SubnetWEBC
+      NetworkAclId: !Ref PublicSubnetNACL
+  PrivateSubnetNACLAssociationAPPA:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref SubnetAPPA
+      NetworkAclId: !Ref PrivateSubnetNACL
+  PrivateSubnetNACLAssociationAPPB:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref SubnetAPPB
+      NetworkAclId: !Ref PrivateSubnetNACL
+  PrivateSubnetNACLAssociationAPPC:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref SubnetAPPC
+      NetworkAclId: !Ref PrivateSubnetNACL
+  PrivateSubnetNACLAssociationDBA:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref SubnetDBA
+      NetworkAclId: !Ref PrivateSubnetNACL
+  PrivateSubnetNACLAssociationDBB:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref SubnetDBB
+      NetworkAclId: !Ref PrivateSubnetNACL
+  PrivateSubnetNACLAssociationDBC:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref SubnetDBC
+      NetworkAclId: !Ref PrivateSubnetNACL
+  BudgetAlarm:
+    Type: 'AWS::Budgets::Budget'
+    Properties:
+      Budget:
+        BudgetName: !Sub ${AWS::StackName}-monthly-budget
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetLimit
+          Unit: USD
+        TimeUnit: MONTHLY
+        BudgetType: COST
+        CostTypes:
+          IncludeTax: true
+          IncludeSubscription: true
+          UseBlended: false
+          UseAmortized: false
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref BudgetNotificationEmail
+  S3GatewayEndpoint:
+    Type: 'AWS::EC2::VPCEndpoint'
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref RouteTableWeb
+        - !Ref PrivateRouteTable
+  VPCFlowLogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      LogGroupName: !Sub /aws/vpc/${AWS::StackName}/flowlogs
+      RetentionInDays: 30
+  VPCFlowLogRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: vpc-flow-logs.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: flowlogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Resource: '*'
+  VPCFlowLog:
+    Type: 'AWS::EC2::FlowLog'
+    Properties:
+      ResourceType: VPC
+      ResourceId: !Ref VPC
+      TrafficType: ALL
+      LogDestinationType: cloud-watch-logs
+      LogGroupName: !Ref VPCFlowLogGroup
+      DeliverLogsPermissionArn: !GetAtt VPCFlowLogRole.Arn
+  InstanceSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      VpcId: !Ref VPC
+      GroupDescription: Restrict access to approved ingress paths only
+      Tags:
+        - Key: Name
+          Value: iQ-sg-public
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DataClassification
+          Value: !Ref DataClassification
+      SecurityGroupIngress:
+        - Description: 'Allow SSH IPv4 IN from trusted CIDR'
+          IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: !Ref AllowedSshCidr
+        - Description: 'Allow HTTPS IPv4 IN'
+          IpProtocol: tcp
+          FromPort: '443'
+          ToPort: '443'
+          CidrIp: '0.0.0.0/0'
+      SecurityGroupEgress:
+        - Description: 'Allow HTTPS egress'
+          IpProtocol: tcp
+          FromPort: '443'
+          ToPort: '443'
+          CidrIp: '0.0.0.0/0'
+        - Description: 'Allow HTTP egress for package updates'
+          IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: '0.0.0.0/0'
+        - Description: 'Allow DNS egress'
+          IpProtocol: udp
+          FromPort: '53'
+          ToPort: '53'
+          CidrIp: '0.0.0.0/0'
+  PublicApplicationSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      VpcId: !Ref VPC
+      GroupDescription: Security group for a WAF-ready public application tier
+      Tags:
+        - Key: Name
+          Value: iQ-sg-app-public
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DataClassification
+          Value: !Ref DataClassification
+      SecurityGroupIngress:
+        - Description: 'Allow HTTP from internet'
+          IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: '0.0.0.0/0'
+        - Description: 'Allow HTTPS from internet'
+          IpProtocol: tcp
+          FromPort: '443'
+          ToPort: '443'
+          CidrIp: '0.0.0.0/0'
+      SecurityGroupEgress:
+        - Description: 'Allow HTTPS egress'
+          IpProtocol: tcp
+          FromPort: '443'
+          ToPort: '443'
+          CidrIp: '0.0.0.0/0'
+        - Description: 'Allow HTTP egress'
+          IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: '0.0.0.0/0'
+  DatabaseSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      VpcId: !Ref VPC
+      GroupDescription: Private-only database tier access from application layer
+      Tags:
+        - Key: Name
+          Value: iQ-sg-db-private
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DataClassification
+          Value: !Ref DataClassification
+      SecurityGroupIngress:
+        - Description: 'Allow MySQL/Aurora from application tier'
+          IpProtocol: tcp
+          FromPort: '3306'
+          ToPort: '3306'
+          SourceSecurityGroupId: !Ref PublicApplicationSecurityGroup
+      SecurityGroupEgress:
+        - Description: 'Allow HTTPS egress'
+          IpProtocol: tcp
+          FromPort: '443'
+          ToPort: '443'
+          CidrIp: '0.0.0.0/0'
+  AIWorkloadSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      VpcId: !Ref VPC
+      GroupDescription: Private-only AI/ML/LLM/GenAI workload access
+      Tags:
+        - Key: Name
+          Value: iQ-sg-ai-private
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DataClassification
+          Value: !Ref DataClassification
+      SecurityGroupIngress:
+        - Description: 'Allow SSH from trusted admin range'
+          IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: !Ref AllowedSshCidr
+        - Description: 'Allow inference traffic from app tier'
+          IpProtocol: tcp
+          FromPort: '8000'
+          ToPort: '8000'
+          SourceSecurityGroupId: !Ref PublicApplicationSecurityGroup
+      SecurityGroupEgress:
+        - Description: 'Allow HTTPS egress for model downloads and APIs'
+          IpProtocol: tcp
+          FromPort: '443'
+          ToPort: '443'
+          CidrIp: '0.0.0.0/0'
+        - Description: 'Allow HTTP egress for package installs'
+          IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: '0.0.0.0/0'
+  AIInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Path: /
+      Roles:
+        - !Ref AIInstanceRole
+  AIInstanceRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: ai-instance-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:DescribeAssociation
+                  - ssm:GetDeployablePatchSnapshotForInstance
+                  - ssm:GetDocument
+                  - ssm:DescribeDocument
+                  - ssm:GetManifest
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:ListAssociations
+                  - ssm:ListInstanceAssociations
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource: '*'
+  SessionManagerRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - 'ssm:DescribeAssociation'
+                  - 'ssm:GetDeployablePatchSnapshotForInstance'
+                  - 'ssm:GetDocument'
+                  - 'ssm:DescribeDocument'
+                  - 'ssm:GetManifest'
+                  - 'ssm:GetParameter'
+                  - 'ssm:GetParameters'
+                  - 'ssm:ListAssociations'
+                  - 'ssm:ListInstanceAssociations'
+                  - 'ssm:PutInventory'
+                  - 'ssm:PutComplianceItems'
+                  - 'ssm:PutConfigurePackageResult'
+                  - 'ssm:UpdateAssociationStatus'
+                  - 'ssm:UpdateInstanceAssociationStatus'
+                  - 'ssm:UpdateInstanceInformation'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'ssmmessages:CreateControlChannel'
+                  - 'ssmmessages:CreateDataChannel'
+                  - 'ssmmessages:OpenControlChannel'
+                  - 'ssmmessages:OpenDataChannel' 
+                Resource: '*'
+              - Effect: Allow
+                Action: 
+                  - 'ec2messages:AcknowledgeMessage'
+                  - 'ec2messages:DeleteMessage'
+                  - 'ec2messages:FailMessage'
+                  - 'ec2messages:GetEndpoint'
+                  - 'ec2messages:GetMessages'
+                  - 'ec2messages:SendReply'
+                Resource: '*'
+  SessionManagerInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Path: /
+      Roles:
+        - !Ref SessionManagerRole
+  AIPlatformCluster:
+    Type: 'AWS::ECS::Cluster'
+    Properties:
+      ClusterName: !Sub ${AWS::StackName}-ai-cluster
+      CapacityProviders:
+        - FARGATE
+        - FARGATE_SPOT
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE_SPOT
+          Weight: 1
+          Base: 0
+  AIPlatformTaskExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: ecs-task-execution
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+Outputs:
+  a4lvpc1:
+    Description: iQ VPC1_ID
+    Value: !Ref VPC
+    Export: 
+      Name: iq-vpc1
+  a4lvpc1subnetweba:
+    Description: iQ VPC1 SubnetWEBA
+    Value: !Ref SubnetWEBA
+    Export:
+      Name: iq-vpc1-subnet-weba
+  a4lvpc1subnetwebb:
+    Description: iQ VPC1 SubnetWEBB
+    Value: !Ref SubnetWEBB
+    Export:
+      Name: iq-vpc1-subnet-webb
+  a4lvpc1subnetwebc:
+    Description: iQ VPC1 SubnetWEBC
+    Value: !Ref SubnetWEBC
+    Export:
+      Name: iq-vpc1-subnet-webc
+  a4lvpc1subnetappa:
+    Description: iQ VPC1 SubnetAPPA
+    Value: !Ref SubnetAPPA
+    Export:
+      Name: iq-vpc1-subnet-appa
+  a4lvpc1subnetappb:
+    Description: iQ VPC1 SubnetAPPB
+    Value: !Ref SubnetAPPB
+    Export:
+      Name: iq-vpc1-subnet-appb
+  a4lvpc1subnetappc:
+    Description: iQ VPC1 SubnetAPPC
+    Value: !Ref SubnetAPPC
+    Export:
+      Name: iq-vpc1-subnet-appc
+  a4lvpc1subnetdba:
+    Description: iQ VPC1 SubnetDBA
+    Value: !Ref SubnetDBA
+    Export:
+      Name: iq-vpc1-subnet-dba
+  a4lvpc1subnetdbb:
+    Description: iQ VPC1 SubnetDBB
+    Value: !Ref SubnetDBB
+    Export:
+      Name: iq-vpc1-subnet-dbb
+  a4lvpc1subnetdbc:
+    Description: iQ VPC1 SubnetDBC
+    Value: !Ref SubnetDBC
+    Export:
+      Name: iq-vpc1-subnet-dbc
+  a4lvpc1subnetreserveda:
+    Description: iQ VPC1 SubnetReservedA
+    Value: !Ref SubnetReservedA
+    Export:
+      Name: iq-vpc1-subnet-reserveda
+  a4lvpc1subnetreservedb:
+    Description: iQ VPC1 SubnetReservedB
+    Value: !Ref SubnetReservedB
+    Export:
+      Name: iq-vpc1-subnet-reservedb
+  a4lvpc1subnetreservedc:
+    Description: iQ VPC1 SubnetReservedC
+    Value: !Ref SubnetReservedC
+    Export:
+      Name: iq-vpc1-subnet-reservedc
+  a4lvpc1subnetaitraininga:
+    Description: iQ AI Training Subnet A
+    Value: !Ref SubnetAITrainingA
+    Export:
+      Name: iq-vpc1-subnet-ai-training-a
+  a4lvpc1subnetaitrainingb:
+    Description: iQ AI Training Subnet B
+    Value: !Ref SubnetAITrainingB
+    Export:
+      Name: iq-vpc1-subnet-ai-training-b
+  a4lvpc1subnetaiinferencea:
+    Description: iQ AI Inference Subnet A
+    Value: !Ref SubnetAIInferenceA
+    Export:
+      Name: iq-vpc1-subnet-ai-inference-a
+  a4lvpc1subnetaiinferenceb:
+    Description: iQ AI Inference Subnet B
+    Value: !Ref SubnetAIInferenceB
+    Export:
+      Name: iq-vpc1-subnet-ai-inference-b

@@ -1,0 +1,148 @@
+# .github/workflows/deploy-iq.yml
+#
+# iQ VPC CloudFormation pipeline
+# - Pull request -> cfn-lint + change-set preview (plan, never applied)
+# - Push to main -> cfn-lint + deploy (create or update, idempotent)
+#
+# Auth: GitHub OIDC -> arn:aws:iam::715841359129:role/github-actions-iq-deploy
+# No long-lived AWS keys are stored in GitHub.
+
+name: Deploy iQ VPC
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'iQ.yaml'
+      - '.github/workflows/deploy-iq.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'iQ.yaml'
+      - '.github/workflows/deploy-iq.yml'
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write   # required for OIDC token exchange
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  STACK_NAME: iq
+  TEMPLATE_FILE: iQ.yaml
+  DEPLOY_ROLE_ARN: arn:aws:iam::715841359129:role/github-actions-iq-deploy
+
+jobs:
+  validate:
+    name: Lint and validate template
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install cfn-lint
+        run: pip install cfn-lint
+
+      - name: Run cfn-lint
+        run: cfn-lint ${{ env.TEMPLATE_FILE }}
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
+          role-session-name: gha-iq-validate-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: CloudFormation validate-template
+        run: |
+          aws cloudformation validate-template \
+            --template-body file://${{ env.TEMPLATE_FILE }}
+
+  preview:
+    name: Change-set preview (PR only)
+    if: github.event_name == 'pull_request'
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
+          role-session-name: gha-iq-preview-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Create change set (no execute)
+        run: |
+          aws cloudformation deploy \
+            --stack-name ${{ env.STACK_NAME }} \
+            --template-file ${{ env.TEMPLATE_FILE }} \
+            --capabilities CAPABILITY_IAM \
+            --no-execute-changeset \
+            --no-fail-on-empty-changeset
+
+      - name: Show change set (plan output)
+        run: |
+          CHANGE_SET=$(aws cloudformation list-change-sets \
+            --stack-name ${{ env.STACK_NAME }} \
+            --query 'Summaries | sort_by(@, &CreationTime) | [-1].ChangeSetName' \
+            --output text)
+          echo "Change set: $CHANGE_SET"
+          aws cloudformation describe-change-set \
+            --stack-name ${{ env.STACK_NAME }} \
+            --change-set-name "$CHANGE_SET" \
+            --query 'Changes[].{Action:ResourceChange.Action,LogicalId:ResourceChange.LogicalResourceId,Type:ResourceChange.ResourceType,Replacement:ResourceChange.Replacement}' \
+            --output table
+
+      - name: Clean up preview change set
+        if: always()
+        run: |
+          CHANGE_SET=$(aws cloudformation list-change-sets \
+            --stack-name ${{ env.STACK_NAME }} \
+            --query 'Summaries | sort_by(@, &CreationTime) | [-1].ChangeSetName' \
+            --output text)
+          if [ "$CHANGE_SET" != "None" ] && [ -n "$CHANGE_SET" ]; then
+            aws cloudformation delete-change-set \
+              --stack-name ${{ env.STACK_NAME }} \
+              --change-set-name "$CHANGE_SET" || true
+          fi
+
+  deploy:
+    name: Deploy stack (main only)
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
+          role-session-name: gha-iq-deploy-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy CloudFormation stack
+        run: |
+          aws cloudformation deploy \
+            --stack-name ${{ env.STACK_NAME }} \
+            --template-file ${{ env.TEMPLATE_FILE }} \
+            --capabilities CAPABILITY_IAM \
+            --no-fail-on-empty-changeset \
+            --tags Environment=iq CostCenter=Platform ManagedBy=github-actions
+
+      - name: Show stack outputs
+        run: |
+          aws cloudformation describe-stacks \
+            --stack-name ${{ env.STACK_NAME }} \
+            --query 'Stacks[0].Outputs[].{Key:OutputKey,Value:OutputValue,Export:ExportName}' \
+            --output table
