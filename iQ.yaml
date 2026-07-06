@@ -1,13 +1,13 @@
-Description:  iQ base VPC Template + Public Instance
+AWSTemplateFormatVersion: '2010-09-09'
+Description: iQ base VPC (3-AZ, web/app/db/AI subnets, NACLs, flow logs, S3 endpoint, ECS Fargate cluster, FinOps budget)
+
 Parameters:
-  LatestAmiId:
-    Description: AMI for Bastion Host (default is latest AmaLinux2023)
-    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
-    Default: '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64'
   AllowedSshCidr:
     Description: Trusted CIDR range for SSH ingress. Replace with an approved corporate or jump-host range.
     Type: String
     Default: 203.0.113.0/24
+    AllowedPattern: ^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$
+    ConstraintDescription: Must be a valid IPv4 CIDR (e.g. 203.0.113.0/24)
   EnvironmentName:
     Description: Environment name used for tagging and naming.
     Type: String
@@ -28,6 +28,8 @@ Parameters:
     Description: Email address for FinOps budget notifications.
     Type: String
     Default: finops@example.com
+    AllowedPattern: ^[^\s@]+@[^\s@]+\.[^\s@]+$
+    ConstraintDescription: Must be a valid email address
   AIWorkloadType:
     Description: Choose the primary AI/ML workload pattern for subnet design.
     Type: String
@@ -37,7 +39,23 @@ Parameters:
       - Training
       - Inference
       - Hybrid
+  CreateEcsServiceLinkedRole:
+    Description: >-
+      Create the ECS service-linked role (AWSServiceRoleForECS). Set to "true" ONLY in a
+      brand-new account where ECS has never been used. It already exists in any account
+      that has ever run ECS, and re-declaring it fails with AlreadyExists.
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+Conditions:
+  ShouldCreateEcsSlr: !Equals [!Ref CreateEcsServiceLinkedRole, 'true']
+
 Resources:
+
+  # ----------------------------------------------------------------- VPC core
   VPC:
     Type: AWS::EC2::VPC
     Properties:
@@ -53,8 +71,11 @@ Resources:
           Value: !Ref CostCenter
         - Key: DataClassification
           Value: !Ref DataClassification
+        - Key: AIWorkloadType
+          Value: !Ref AIWorkloadType
+
   InternetGateway:
-    Type: 'AWS::EC2::InternetGateway'
+    Type: AWS::EC2::InternetGateway
     Properties:
       Tags:
         - Key: Name
@@ -65,13 +86,16 @@ Resources:
           Value: !Ref CostCenter
         - Key: DataClassification
           Value: !Ref DataClassification
+
   InternetGatewayAttachment:
-    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Type: AWS::EC2::VPCGatewayAttachment
     Properties:
       VpcId: !Ref VPC
       InternetGatewayId: !Ref InternetGateway
-  RouteTableWeb: 
-    Type: 'AWS::EC2::RouteTable'
+
+  # ------------------------------------------------------------- Route tables
+  RouteTableWeb:
+    Type: AWS::EC2::RouteTable
     Properties:
       VpcId: !Ref VPC
       Tags:
@@ -83,17 +107,17 @@ Resources:
           Value: !Ref CostCenter
         - Key: DataClassification
           Value: !Ref DataClassification
-  RouteTableWebDefaultIPv4: 
-    Type: 'AWS::EC2::Route'
+
+  RouteTableWebDefaultIPv4:
+    Type: AWS::EC2::Route
     DependsOn: InternetGatewayAttachment
     Properties:
-      RouteTableId:
-        Ref: RouteTableWeb
-      DestinationCidrBlock: '0.0.0.0/0'
-      GatewayId:
-        Ref: InternetGateway
+      RouteTableId: !Ref RouteTableWeb
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
   PrivateRouteTable:
-    Type: 'AWS::EC2::RouteTable'
+    Type: AWS::EC2::RouteTable
     Properties:
       VpcId: !Ref VPC
       Tags:
@@ -105,200 +129,262 @@ Resources:
           Value: !Ref CostCenter
         - Key: DataClassification
           Value: !Ref DataClassification
+
   RouteTableAssociationWebA:
-    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref SubnetWEBA
-      RouteTableId:
-        Ref: RouteTableWeb
+      RouteTableId: !Ref RouteTableWeb
   RouteTableAssociationWebB:
-    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref SubnetWEBB
-      RouteTableId:
-        Ref: RouteTableWeb
+      RouteTableId: !Ref RouteTableWeb
   RouteTableAssociationWebC:
-    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref SubnetWEBC
-      RouteTableId:
-        Ref: RouteTableWeb
+      RouteTableId: !Ref RouteTableWeb
   RouteTableAssociationPrivateAPPA:
-    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref SubnetAPPA
-      RouteTableId:
-        Ref: PrivateRouteTable
+      RouteTableId: !Ref PrivateRouteTable
   RouteTableAssociationPrivateAPPB:
-    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref SubnetAPPB
-      RouteTableId:
-        Ref: PrivateRouteTable
+      RouteTableId: !Ref PrivateRouteTable
   RouteTableAssociationPrivateAPPC:
-    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref SubnetAPPC
-      RouteTableId:
-        Ref: PrivateRouteTable
+      RouteTableId: !Ref PrivateRouteTable
   RouteTableAssociationPrivateDBA:
-    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref SubnetDBA
-      RouteTableId:
-        Ref: PrivateRouteTable
+      RouteTableId: !Ref PrivateRouteTable
   RouteTableAssociationPrivateDBB:
-    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref SubnetDBB
-      RouteTableId:
-        Ref: PrivateRouteTable
+      RouteTableId: !Ref PrivateRouteTable
   RouteTableAssociationPrivateDBC:
-    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref SubnetDBC
-      RouteTableId:
-        Ref: PrivateRouteTable
+      RouteTableId: !Ref PrivateRouteTable
   RouteTableAssociationPrivateAITrainingA:
-    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref SubnetAITrainingA
-      RouteTableId:
-        Ref: PrivateRouteTable
+      RouteTableId: !Ref PrivateRouteTable
   RouteTableAssociationPrivateAITrainingB:
-    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref SubnetAITrainingB
-      RouteTableId:
-        Ref: PrivateRouteTable
+      RouteTableId: !Ref PrivateRouteTable
   RouteTableAssociationPrivateAIInferenceA:
-    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref SubnetAIInferenceA
-      RouteTableId:
-        Ref: PrivateRouteTable
+      RouteTableId: !Ref PrivateRouteTable
   RouteTableAssociationPrivateAIInferenceB:
-    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref SubnetAIInferenceB
-      RouteTableId:
-        Ref: PrivateRouteTable
+      RouteTableId: !Ref PrivateRouteTable
+
+  # ----------------------------------------------------------------- Subnets
   SubnetReservedA:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      AvailabilityZone: !Select [0, !GetAZs '']
       CidrBlock: 10.16.0.0/20
       Tags:
         - Key: Name
           Value: L7.reserved.subnet.1a
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DataClassification
+          Value: !Ref DataClassification
   SubnetReservedB:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      AvailabilityZone: !Select [1, !GetAZs '']
       CidrBlock: 10.16.64.0/20
       Tags:
         - Key: Name
           Value: L7.reserved.subnet.1b
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DataClassification
+          Value: !Ref DataClassification
   SubnetReservedC:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      AvailabilityZone: !Select [ 2, !GetAZs '' ]
+      AvailabilityZone: !Select [2, !GetAZs '']
       CidrBlock: 10.16.128.0/20
       Tags:
         - Key: Name
           Value: L7.reserved.subnet.1c
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DataClassification
+          Value: !Ref DataClassification
   SubnetDBA:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      AvailabilityZone: !Select [0, !GetAZs '']
       CidrBlock: 10.16.16.0/20
       Tags:
         - Key: Name
           Value: L2.SQL.subnet.1a
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DataClassification
+          Value: !Ref DataClassification
   SubnetDBB:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      AvailabilityZone: !Select [1, !GetAZs '']
       CidrBlock: 10.16.80.0/20
       Tags:
         - Key: Name
           Value: L2.SQL.subnet.1b
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DataClassification
+          Value: !Ref DataClassification
   SubnetDBC:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      AvailabilityZone: !Select [ 2, !GetAZs '' ]
+      AvailabilityZone: !Select [2, !GetAZs '']
       CidrBlock: 10.16.144.0/20
       Tags:
         - Key: Name
           Value: L2.SQL.subnet.1c
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DataClassification
+          Value: !Ref DataClassification
   SubnetAPPA:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      AvailabilityZone: !Select [0, !GetAZs '']
       CidrBlock: 10.16.32.0/20
       Tags:
         - Key: Name
           Value: iQ.subnet.1a
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DataClassification
+          Value: !Ref DataClassification
   SubnetAPPB:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      AvailabilityZone: !Select [1, !GetAZs '']
       CidrBlock: 10.16.96.0/20
       Tags:
         - Key: Name
           Value: iQ.subnet.1b
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DataClassification
+          Value: !Ref DataClassification
   SubnetAPPC:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      AvailabilityZone: !Select [ 2, !GetAZs '' ]
+      AvailabilityZone: !Select [2, !GetAZs '']
       CidrBlock: 10.16.160.0/20
       Tags:
         - Key: Name
           Value: iQ.subnet.1c
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DataClassification
+          Value: !Ref DataClassification
   SubnetWEBA:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      AvailabilityZone: !Select [0, !GetAZs '']
       CidrBlock: 10.16.48.0/20
       MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
           Value: sn-web-A
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DataClassification
+          Value: !Ref DataClassification
   SubnetWEBB:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      AvailabilityZone: !Select [1, !GetAZs '']
       CidrBlock: 10.16.112.0/20
       MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
           Value: sn-web-B
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DataClassification
+          Value: !Ref DataClassification
   SubnetWEBC:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      AvailabilityZone: !Select [ 2, !GetAZs '' ]
+      AvailabilityZone: !Select [2, !GetAZs '']
       CidrBlock: 10.16.176.0/20
       MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
           Value: sn-web-C
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DataClassification
+          Value: !Ref DataClassification
   SubnetAITrainingA:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      AvailabilityZone: !Select [0, !GetAZs '']
       CidrBlock: 10.16.192.0/20
       Tags:
         - Key: Name
@@ -315,7 +401,7 @@ Resources:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      AvailabilityZone: !Select [1, !GetAZs '']
       CidrBlock: 10.16.208.0/20
       Tags:
         - Key: Name
@@ -332,7 +418,7 @@ Resources:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      AvailabilityZone: !Select [0, !GetAZs '']
       CidrBlock: 10.16.224.0/20
       Tags:
         - Key: Name
@@ -349,7 +435,7 @@ Resources:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      AvailabilityZone: !Select [1, !GetAZs '']
       CidrBlock: 10.16.240.0/20
       Tags:
         - Key: Name
@@ -362,6 +448,8 @@ Resources:
           Value: !Ref CostCenter
         - Key: DataClassification
           Value: !Ref DataClassification
+
+  # -------------------------------------------------------------------- NACLs
   PublicSubnetNACL:
     Type: AWS::EC2::NetworkAcl
     Properties:
@@ -375,6 +463,7 @@ Resources:
           Value: !Ref CostCenter
         - Key: DataClassification
           Value: !Ref DataClassification
+
   PrivateSubnetNACL:
     Type: AWS::EC2::NetworkAcl
     Properties:
@@ -388,6 +477,8 @@ Resources:
           Value: !Ref CostCenter
         - Key: DataClassification
           Value: !Ref DataClassification
+
+  # Public NACL - inbound
   PublicSubnetNACLIngressHTTP:
     Type: AWS::EC2::NetworkAclEntry
     Properties:
@@ -436,7 +527,11 @@ Resources:
       PortRange:
         From: 1024
         To: 65535
-  PublicSubnetNACLEgress:
+
+  # Public NACL - outbound
+  # NACLs are stateless: return traffic for inbound 80/443/22 leaves on the
+  # client's ephemeral port, so an ephemeral egress rule is mandatory.
+  PublicSubnetNACLEgressHTTP:
     Type: AWS::EC2::NetworkAclEntry
     Properties:
       NetworkAclId: !Ref PublicSubnetNACL
@@ -447,7 +542,45 @@ Resources:
       CidrBlock: 0.0.0.0/0
       PortRange:
         From: 80
+        To: 80
+  PublicSubnetNACLEgressHTTPS:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PublicSubnetNACL
+      RuleNumber: 110
+      Protocol: 6
+      RuleAction: allow
+      Egress: true
+      CidrBlock: 0.0.0.0/0
+      PortRange:
+        From: 443
         To: 443
+  PublicSubnetNACLEgressEphemeral:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PublicSubnetNACL
+      RuleNumber: 120
+      Protocol: 6
+      RuleAction: allow
+      Egress: true
+      CidrBlock: 0.0.0.0/0
+      PortRange:
+        From: 1024
+        To: 65535
+  PublicSubnetNACLEgressDNS:
+    Type: AWS::EC2::NetworkAclEntry
+    Properties:
+      NetworkAclId: !Ref PublicSubnetNACL
+      RuleNumber: 130
+      Protocol: 17
+      RuleAction: allow
+      Egress: true
+      CidrBlock: 0.0.0.0/0
+      PortRange:
+        From: 53
+        To: 53
+
+  # Private NACL - inbound
   PrivateSubnetNACLIngress:
     Type: AWS::EC2::NetworkAclEntry
     Properties:
@@ -457,9 +590,8 @@ Resources:
       RuleAction: allow
       Egress: false
       CidrBlock: !GetAtt VPC.CidrBlock
-      PortRange:
-        From: 0
-        To: 65535
+  # Return traffic from the S3 Gateway Endpoint arrives from S3 public IPs,
+  # so ephemeral ingress must be open beyond the VPC CIDR.
   PrivateSubnetNACLIngressEphemeral:
     Type: AWS::EC2::NetworkAclEntry
     Properties:
@@ -468,10 +600,12 @@ Resources:
       Protocol: 6
       RuleAction: allow
       Egress: false
-      CidrBlock: !GetAtt VPC.CidrBlock
+      CidrBlock: 0.0.0.0/0
       PortRange:
         From: 1024
         To: 65535
+
+  # Private NACL - outbound
   PrivateSubnetNACLEgress:
     Type: AWS::EC2::NetworkAclEntry
     Properties:
@@ -481,9 +615,8 @@ Resources:
       RuleAction: allow
       Egress: true
       CidrBlock: 0.0.0.0/0
-      PortRange:
-        From: 0
-        To: 65535
+
+  # NACL associations
   PublicSubnetNACLAssociationWEBA:
     Type: AWS::EC2::SubnetNetworkAclAssociation
     Properties:
@@ -529,8 +662,31 @@ Resources:
     Properties:
       SubnetId: !Ref SubnetDBC
       NetworkAclId: !Ref PrivateSubnetNACL
+  # AI subnets now inherit the same private NACL instead of the VPC default
+  PrivateSubnetNACLAssociationAITrainingA:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref SubnetAITrainingA
+      NetworkAclId: !Ref PrivateSubnetNACL
+  PrivateSubnetNACLAssociationAITrainingB:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref SubnetAITrainingB
+      NetworkAclId: !Ref PrivateSubnetNACL
+  PrivateSubnetNACLAssociationAIInferenceA:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref SubnetAIInferenceA
+      NetworkAclId: !Ref PrivateSubnetNACL
+  PrivateSubnetNACLAssociationAIInferenceB:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref SubnetAIInferenceB
+      NetworkAclId: !Ref PrivateSubnetNACL
+
+  # ------------------------------------------------------------------- FinOps
   BudgetAlarm:
-    Type: 'AWS::Budgets::Budget'
+    Type: AWS::Budgets::Budget
     Properties:
       Budget:
         BudgetName: !Sub ${AWS::StackName}-monthly-budget
@@ -553,8 +709,18 @@ Resources:
           Subscribers:
             - SubscriptionType: EMAIL
               Address: !Ref BudgetNotificationEmail
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref BudgetNotificationEmail
+
+  # ---------------------------------------------------------------- Endpoints
   S3GatewayEndpoint:
-    Type: 'AWS::EC2::VPCEndpoint'
+    Type: AWS::EC2::VPCEndpoint
     Properties:
       VpcId: !Ref VPC
       ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
@@ -562,13 +728,16 @@ Resources:
       RouteTableIds:
         - !Ref RouteTableWeb
         - !Ref PrivateRouteTable
+
+  # ---------------------------------------------------------------- Flow logs
   VPCFlowLogGroup:
-    Type: 'AWS::Logs::LogGroup'
+    Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /aws/vpc/${AWS::StackName}/flowlogs
       RetentionInDays: 30
+
   VPCFlowLogRole:
-    Type: 'AWS::IAM::Role'
+    Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -584,14 +753,16 @@ Resources:
             Statement:
               - Effect: Allow
                 Action:
-                  - logs:CreateLogGroup
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                   - logs:DescribeLogGroups
                   - logs:DescribeLogStreams
-                Resource: '*'
+                Resource:
+                  - !GetAtt VPCFlowLogGroup.Arn
+                  - !Sub ${VPCFlowLogGroup.Arn}:*
+
   VPCFlowLog:
-    Type: 'AWS::EC2::FlowLog'
+    Type: AWS::EC2::FlowLog
     Properties:
       ResourceType: VPC
       ResourceId: !Ref VPC
@@ -599,8 +770,10 @@ Resources:
       LogDestinationType: cloud-watch-logs
       LogGroupName: !Ref VPCFlowLogGroup
       DeliverLogsPermissionArn: !GetAtt VPCFlowLogRole.Arn
+
+  # ----------------------------------------------------------- Security groups
   InstanceSecurityGroup:
-    Type: 'AWS::EC2::SecurityGroup'
+    Type: AWS::EC2::SecurityGroup
     Properties:
       VpcId: !Ref VPC
       GroupDescription: Restrict access to approved ingress paths only
@@ -614,34 +787,35 @@ Resources:
         - Key: DataClassification
           Value: !Ref DataClassification
       SecurityGroupIngress:
-        - Description: 'Allow SSH IPv4 IN from trusted CIDR'
+        - Description: Allow SSH IPv4 IN from trusted CIDR
           IpProtocol: tcp
-          FromPort: '22'
-          ToPort: '22'
+          FromPort: 22
+          ToPort: 22
           CidrIp: !Ref AllowedSshCidr
-        - Description: 'Allow HTTPS IPv4 IN'
+        - Description: Allow HTTPS IPv4 IN
           IpProtocol: tcp
-          FromPort: '443'
-          ToPort: '443'
-          CidrIp: '0.0.0.0/0'
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
       SecurityGroupEgress:
-        - Description: 'Allow HTTPS egress'
+        - Description: Allow HTTPS egress
           IpProtocol: tcp
-          FromPort: '443'
-          ToPort: '443'
-          CidrIp: '0.0.0.0/0'
-        - Description: 'Allow HTTP egress for package updates'
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - Description: Allow HTTP egress for package updates
           IpProtocol: tcp
-          FromPort: '80'
-          ToPort: '80'
-          CidrIp: '0.0.0.0/0'
-        - Description: 'Allow DNS egress'
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - Description: Allow DNS egress
           IpProtocol: udp
-          FromPort: '53'
-          ToPort: '53'
-          CidrIp: '0.0.0.0/0'
+          FromPort: 53
+          ToPort: 53
+          CidrIp: 0.0.0.0/0
+
   PublicApplicationSecurityGroup:
-    Type: 'AWS::EC2::SecurityGroup'
+    Type: AWS::EC2::SecurityGroup
     Properties:
       VpcId: !Ref VPC
       GroupDescription: Security group for a WAF-ready public application tier
@@ -655,29 +829,30 @@ Resources:
         - Key: DataClassification
           Value: !Ref DataClassification
       SecurityGroupIngress:
-        - Description: 'Allow HTTP from internet'
+        - Description: Allow HTTP from internet
           IpProtocol: tcp
-          FromPort: '80'
-          ToPort: '80'
-          CidrIp: '0.0.0.0/0'
-        - Description: 'Allow HTTPS from internet'
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - Description: Allow HTTPS from internet
           IpProtocol: tcp
-          FromPort: '443'
-          ToPort: '443'
-          CidrIp: '0.0.0.0/0'
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
       SecurityGroupEgress:
-        - Description: 'Allow HTTPS egress'
+        - Description: Allow HTTPS egress
           IpProtocol: tcp
-          FromPort: '443'
-          ToPort: '443'
-          CidrIp: '0.0.0.0/0'
-        - Description: 'Allow HTTP egress'
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - Description: Allow HTTP egress
           IpProtocol: tcp
-          FromPort: '80'
-          ToPort: '80'
-          CidrIp: '0.0.0.0/0'
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
   DatabaseSecurityGroup:
-    Type: 'AWS::EC2::SecurityGroup'
+    Type: AWS::EC2::SecurityGroup
     Properties:
       VpcId: !Ref VPC
       GroupDescription: Private-only database tier access from application layer
@@ -691,25 +866,28 @@ Resources:
         - Key: DataClassification
           Value: !Ref DataClassification
       SecurityGroupIngress:
-        - Description: 'Allow MySQL/Aurora from application tier'
+        - Description: Allow MySQL/Aurora from application tier
           IpProtocol: tcp
-          FromPort: '3306'
-          ToPort: '3306'
+          FromPort: 3306
+          ToPort: 3306
           SourceSecurityGroupId: !Ref PublicApplicationSecurityGroup
       SecurityGroupEgress:
-        - Description: 'Allow HTTPS egress'
+        - Description: Allow HTTPS egress
           IpProtocol: tcp
-          FromPort: '443'
-          ToPort: '443'
-          CidrIp: '0.0.0.0/0'
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
   AIWorkloadSecurityGroup:
-    Type: 'AWS::EC2::SecurityGroup'
+    Type: AWS::EC2::SecurityGroup
     Properties:
       VpcId: !Ref VPC
       GroupDescription: Private-only AI/ML/LLM/GenAI workload access
       Tags:
         - Key: Name
           Value: iQ-sg-ai-private
+        - Key: WorkloadType
+          Value: !Ref AIWorkloadType
         - Key: Environment
           Value: !Ref EnvironmentName
         - Key: CostCenter
@@ -717,129 +895,77 @@ Resources:
         - Key: DataClassification
           Value: !Ref DataClassification
       SecurityGroupIngress:
-        - Description: 'Allow SSH from trusted admin range'
+        - Description: Allow SSH from trusted admin range
           IpProtocol: tcp
-          FromPort: '22'
-          ToPort: '22'
+          FromPort: 22
+          ToPort: 22
           CidrIp: !Ref AllowedSshCidr
-        - Description: 'Allow inference traffic from app tier'
+        - Description: Allow inference traffic from app tier
           IpProtocol: tcp
-          FromPort: '8000'
-          ToPort: '8000'
+          FromPort: 8000
+          ToPort: 8000
           SourceSecurityGroupId: !Ref PublicApplicationSecurityGroup
       SecurityGroupEgress:
-        - Description: 'Allow HTTPS egress for model downloads and APIs'
+        - Description: Allow HTTPS egress for model downloads and APIs
           IpProtocol: tcp
-          FromPort: '443'
-          ToPort: '443'
-          CidrIp: '0.0.0.0/0'
-        - Description: 'Allow HTTP egress for package installs'
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - Description: Allow HTTP egress for package installs
           IpProtocol: tcp
-          FromPort: '80'
-          ToPort: '80'
-          CidrIp: '0.0.0.0/0'
-  AIInstanceProfile:
-    Type: 'AWS::IAM::InstanceProfile'
-    Properties:
-      Path: /
-      Roles:
-        - !Ref AIInstanceRole
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  # ---------------------------------------------------------------------- IAM
+  # Single consolidated instance role. AmazonSSMManagedInstanceCore replaces the
+  # two long inline SSM/ssmmessages/ec2messages policies that were previously
+  # duplicated across AIInstanceRole and SessionManagerRole.
   AIInstanceRole:
-    Type: 'AWS::IAM::Role'
+    Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
-              Service:
-                - ec2.amazonaws.com
-            Action:
-              - 'sts:AssumeRole'
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
       Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
       Policies:
-        - PolicyName: ai-instance-policy
+        - PolicyName: ai-instance-s3
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Effect: Allow
-                Action:
-                  - ssm:DescribeAssociation
-                  - ssm:GetDeployablePatchSnapshotForInstance
-                  - ssm:GetDocument
-                  - ssm:DescribeDocument
-                  - ssm:GetManifest
-                  - ssm:GetParameter
-                  - ssm:GetParameters
-                  - ssm:ListAssociations
-                  - ssm:ListInstanceAssociations
-                Resource: '*'
-              - Effect: Allow
+              - Sid: S3DataAccess
+                Effect: Allow
                 Action:
                   - s3:GetObject
                   - s3:PutObject
                   - s3:ListBucket
                 Resource: '*'
-  SessionManagerRole:
-    Type: 'AWS::IAM::Role'
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: 2012-10-17
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service:
-              - ec2.amazonaws.com
-            Action:
-              - 'sts:AssumeRole'
-      Path: /
-      Policies:
-        - PolicyName: root
-          PolicyDocument:
-            Version: 2012-10-17
-            Statement:
-              - Effect: Allow
-                Action: 
-                  - 'ssm:DescribeAssociation'
-                  - 'ssm:GetDeployablePatchSnapshotForInstance'
-                  - 'ssm:GetDocument'
-                  - 'ssm:DescribeDocument'
-                  - 'ssm:GetManifest'
-                  - 'ssm:GetParameter'
-                  - 'ssm:GetParameters'
-                  - 'ssm:ListAssociations'
-                  - 'ssm:ListInstanceAssociations'
-                  - 'ssm:PutInventory'
-                  - 'ssm:PutComplianceItems'
-                  - 'ssm:PutConfigurePackageResult'
-                  - 'ssm:UpdateAssociationStatus'
-                  - 'ssm:UpdateInstanceAssociationStatus'
-                  - 'ssm:UpdateInstanceInformation'
-                Resource: '*'
-              - Effect: Allow
-                Action:
-                  - 'ssmmessages:CreateControlChannel'
-                  - 'ssmmessages:CreateDataChannel'
-                  - 'ssmmessages:OpenControlChannel'
-                  - 'ssmmessages:OpenDataChannel' 
-                Resource: '*'
-              - Effect: Allow
-                Action: 
-                  - 'ec2messages:AcknowledgeMessage'
-                  - 'ec2messages:DeleteMessage'
-                  - 'ec2messages:FailMessage'
-                  - 'ec2messages:GetEndpoint'
-                  - 'ec2messages:GetMessages'
-                  - 'ec2messages:SendReply'
-                Resource: '*'
-  SessionManagerInstanceProfile:
-    Type: 'AWS::IAM::InstanceProfile'
+
+  AIInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
     Properties:
       Path: /
       Roles:
-        - !Ref SessionManagerRole
+        - !Ref AIInstanceRole
+
+  # ----------------------------------------------------------------------- ECS
+  # AWSServiceRoleForECS is an account-wide singleton. It is only created here
+  # when CreateEcsServiceLinkedRole=true (fresh account); otherwise the existing
+  # role is used automatically by the ECS cluster.
+  ECSServiceLinkedRole:
+    Type: AWS::IAM::ServiceLinkedRole
+    Condition: ShouldCreateEcsSlr
+    Properties:
+      AWSServiceName: ecs.amazonaws.com
+
   AIPlatformCluster:
-    Type: 'AWS::ECS::Cluster'
+    Type: AWS::ECS::Cluster
     Properties:
       ClusterName: !Sub ${AWS::StackName}-ai-cluster
       CapacityProviders:
@@ -849,8 +975,16 @@ Resources:
         - CapacityProvider: FARGATE_SPOT
           Weight: 1
           Base: 0
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DataClassification
+          Value: !Ref DataClassification
+
   AIPlatformTaskExecutionRole:
-    Type: 'AWS::IAM::Role'
+    Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -860,25 +994,14 @@ Resources:
               Service: ecs-tasks.amazonaws.com
             Action: sts:AssumeRole
       Path: /
-      Policies:
-        - PolicyName: ecs-task-execution
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - ecr:GetAuthorizationToken
-                  - ecr:BatchCheckLayerAvailability
-                  - ecr:GetDownloadUrlForLayer
-                  - ecr:BatchGetImage
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                Resource: '*'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
 Outputs:
   a4lvpc1:
     Description: iQ VPC1_ID
     Value: !Ref VPC
-    Export: 
+    Export:
       Name: iq-vpc1
   a4lvpc1subnetweba:
     Description: iQ VPC1 SubnetWEBA
@@ -960,3 +1083,13 @@ Outputs:
     Value: !Ref SubnetAIInferenceB
     Export:
       Name: iq-vpc1-subnet-ai-inference-b
+  a4lvpc1aicluster:
+    Description: iQ AI Platform ECS Cluster
+    Value: !Ref AIPlatformCluster
+    Export:
+      Name: iq-vpc1-ai-cluster
+  a4lvpc1aisg:
+    Description: iQ AI Workload Security Group
+    Value: !Ref AIWorkloadSecurityGroup
+    Export:
+      Name: iq-vpc1-ai-sg
